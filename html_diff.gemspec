@@ -7,11 +7,11 @@ Gem::Specification.new do |spec|
   spec.name          = "html_diff"
   spec.version       = HTMLDiff::VERSION
   spec.authors       = ["Ben Ubois"]
-  spec.email         = ["ben@benubois.com"]
-  spec.description   = %q{TODO: Write a gem description}
-  spec.summary       = %q{TODO: Write a gem summary}
+  spec.email         = ["ben@feedbin.me"]
+  spec.description   = %q{Compare HTML and Markdown using inline or side-by-side diffs.}
+  spec.summary       = %q{Compare HTML and Markdown using inline or side-by-side diffs.}
   spec.homepage      = ""
-  spec.license       = "MIT"
+  spec.license       = "GPLv2"
 
   spec.files         = `git ls-files`.split($/)
   spec.executables   = spec.files.grep(%r{^bin/}) { |f| File.basename(f) }
