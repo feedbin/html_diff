@@ -10,15 +10,7 @@ Installation
 
 Add this line to your application's Gemfile:
 
-    gem 'html_diff'
-
-And then execute:
-
-    $ bundle
-
-Or install it yourself as:
-
-    $ gem install html_diff
+    gem 'html_diff', github: 'feedbin/html_diff'
 
 Usage
 -----
