@@ -27,11 +27,11 @@ Usage
 require "html_diff"
 
 # Generate inline HTML diff
-HTMLDiff.new(before, after).inline_html
+HTMLDiff::Diff.new(before, after).inline_html
 
 # Generate side-by-side HTML diff
-HTMLDiff.new(before, after).side_by_side_html
+HTMLDiff::Diff.new(before, after).side_by_side_html
 
 # Generate side-by-side Markdown diff
-HTMLDiff.new(before, after).side_by_side_markdown
+HTMLDiff::Diff.new(before, after).side_by_side_markdown
 ```
