@@ -27,3 +27,10 @@ HTMLDiff::Diff.new(before, after).side_by_side_html
 # Generate side-by-side Markdown diff
 HTMLDiff::Diff.new(before, after).side_by_side_markdown
 ```
+
+Development
+-----------
+
+Run the tests:
+
+    bundle exec rake

@@ -1,7 +1,12 @@
 # frozen_string_literal: true
 
+require "nokogiri"
+require "cgi/escape"
 require "html_diff/version"
 require "html_diff/onpdiff"
+require "html_diff/tokenizer"
+require "html_diff/sequence_diff"
+require "html_diff/cleanup"
 
 module HTMLDiff
   class Diff
@@ -33,12 +38,7 @@ module HTMLDiff
           end
 
           if i + 1 < block_by_block_diff.size && block_by_block_diff[i + 1][1] == opposite_op_code
-            diff =
-            ONPDiff.new(
-            tokenize_html(block_by_block_diff[first][0]),
-            tokenize_html(block_by_block_diff[second][0]),
-            ).diff
-            inline << generate_inline_html(diff)
+            inline << generate_inline_html(*token_diff(block_by_block_diff[first][0], block_by_block_diff[second][0]))
             i += 1
           else
             inline << add_class_or_wrap_in_tags(block_by_block_diff[i][0], klass)
@@ -74,12 +74,7 @@ module HTMLDiff
           end
 
           if i + 1 < block_by_block_diff.size && block_by_block_diff[i + 1][1] == opposite_op_code
-            diff =
-            ONPDiff.new(
-            tokenize_html(block_by_block_diff[first][0]),
-            tokenize_html(block_by_block_diff[second][0]),
-            ).diff
-            deleted, inserted = generate_side_by_side_html(diff)
+            deleted, inserted = generate_side_by_side_html(*token_diff(block_by_block_diff[first][0], block_by_block_diff[second][0]))
             left << deleted
             right << inserted
             i += 1
@@ -195,11 +190,43 @@ module HTMLDiff
     end
 
     def tokenize_html_blocks(html)
-      Nokogiri::HTML5.fragment(html).search("./*").map(&:to_html)
+      Nokogiri::HTML5.fragment(html).children
+        .select { |node| node.element? || (node.text? && !node.content.strip.empty?) }
+        .map { |node| node.to_html.tap { |block| block_nodes[block] = node } }
+    end
+
+    def block_nodes
+      @block_nodes ||= {}
     end
 
     def tokenize_html(html)
-      HtmlTokenizer.tokenize(html)
+      @child_tokens ||= {}
+      Tokenizer.tokenize(block_nodes.fetch(html), child_cache: @child_tokens)
+    end
+
+    # Word-level diff of two blocks: their tokens and the SequenceDiff runs.
+    def token_diff(before_html, after_html)
+      before_tokens = tokenize_html(before_html)
+      after_tokens = tokenize_html(after_html)
+
+      # Only the tokens between identical leading and trailing ones are diffed.
+      limit = [before_tokens.size, after_tokens.size].min
+      prefix = 0
+      prefix += 1 while prefix < limit && before_tokens[prefix] == after_tokens[prefix]
+      suffix = 0
+      suffix += 1 while suffix < limit - prefix && before_tokens[-1 - suffix] == after_tokens[-1 - suffix]
+
+      keys = {}
+      ids = {}
+      id = ->(token) { ids[token] ||= (keys[Tokenizer.comparison_key(token)] ||= keys.size) }
+      a = before_tokens[prefix...before_tokens.size - suffix].map(&id)
+      b = after_tokens[prefix...after_tokens.size - suffix].map(&id)
+
+      runs = [[:common, 0, 0, prefix]]
+      SequenceDiff.new(a, b).runs.each { |op, a_index, b_index, length| runs << [op, a_index + prefix, b_index + prefix, length] }
+      runs << [:common, before_tokens.size - suffix, after_tokens.size - suffix, suffix]
+      runs = runs.reject { |run| run[3] == 0 }
+      [before_tokens, after_tokens, Cleanup.fold_short_equalities(runs, before_tokens, after_tokens)]
     end
 
     def add_class_or_wrap_in_tags(html_or_text, klass)
@@ -225,32 +252,39 @@ module HTMLDiff
       end
     end
 
-    def generate_inline_html(diff)
+    # Unchanged tokens are rendered as they appear after.
+    def generate_inline_html(before_tokens, after_tokens, runs)
       inline = []
-      diff.each do |d|
-        case d[1]
+      runs.each_with_index do |(op, a_index, b_index, length), index|
+        case op
         when :common
-          inline << d[0]
+          inline << after_tokens[b_index, length].join
+          # A word that lost its trailing space keeps it as a deletion when
+          # removed words follow, so they don't run into it.
+          if runs.dig(index + 1, 0) == :delete
+            space = before_tokens[a_index + length - 1].delete_prefix(after_tokens[b_index + length - 1])
+            inline << add_class_or_wrap_in_tags(space, "del") if space.match?(/\A[ \t]+\z/)
+          end
         when :delete
-          inline << add_class_or_wrap_in_tags(d[0], "del")
+          before_tokens[a_index, length].each { |token| inline << add_class_or_wrap_in_tags(token, "del") }
         when :add
-          inline << add_class_or_wrap_in_tags(d[0], "ins")
+          after_tokens[b_index, length].each { |token| inline << add_class_or_wrap_in_tags(token, "ins") }
         end
       end
-      inline
+      inline.join
     end
 
-    def generate_side_by_side_html(diff)
+    def generate_side_by_side_html(before_tokens, after_tokens, runs)
       deleted, inserted = [], []
-      diff.each do |d|
-        case d[1]
+      runs.each do |op, a_index, b_index, length|
+        case op
         when :common
-          deleted << d[0]
-          inserted << d[0]
+          deleted << before_tokens[a_index, length].join
+          inserted << after_tokens[b_index, length].join
         when :delete
-          deleted << add_class_or_wrap_in_tags(d[0], "del")
+          before_tokens[a_index, length].each { |token| deleted << add_class_or_wrap_in_tags(token, "del") }
         when :add
-          inserted << add_class_or_wrap_in_tags(d[0], "ins")
+          after_tokens[b_index, length].each { |token| inserted << add_class_or_wrap_in_tags(token, "ins") }
         end
       end
       [deleted, inserted]
@@ -270,38 +304,6 @@ module HTMLDiff
         end
       end
       [deleted, inserted]
-    end
-
-    class HtmlTokenizer < Nokogiri::XML::SAX::Document
-      attr_accessor :tokens
-
-      def initialize
-        @tokens = []
-      end
-
-      def self.tokenize(html)
-        me = new
-        parser = Nokogiri::HTML4::SAX::Parser.new(me, Encoding::UTF_8)
-        parser.parse("<html><body>#{html}</body></html>")
-        me.tokens
-      end
-
-      USELESS_TAGS = %w[html body]
-      def start_element(name, attributes = [])
-        return if USELESS_TAGS.include?(name)
-        attrs = attributes.map { |a| " #{a[0]}=\"#{CGI.escapeHTML(a[1])}\"" }.join
-        @tokens << "<#{name}#{attrs}>"
-      end
-
-      AUTOCLOSING_TAGS = %w[area base br col embed hr img input meta]
-      def end_element(name)
-        return if USELESS_TAGS.include?(name) || AUTOCLOSING_TAGS.include?(name)
-        @tokens << "</#{name}>"
-      end
-
-      def characters(string)
-        @tokens.concat string.scan(/\W|\w+[ \t]*/).map { |x| CGI.escapeHTML(x) }
-      end
     end
   end
 end

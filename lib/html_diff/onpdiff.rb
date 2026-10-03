@@ -38,7 +38,8 @@ class ONPDiff
     begin
       p += 1
 
-      return(@shortest_path = []) if p >= 1000
+      # Too many edits to resolve: mark everything as deleted then added.
+      return(@shortest_path = [[@m, @n], [@m, 0]]) if p >= 1000
 
       k = -p
       while k <= @delta - 1
